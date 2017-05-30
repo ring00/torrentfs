@@ -17,11 +17,11 @@ type TorrentFS struct {
 	root *RootNode
 }
 
-func (fs *TorrentFS) Root() (Node, error) {
-	return *root, nil
+func (fs *TorrentFS) Root() (fs.Node, error) {
+	return fs.root, nil
 }
 
-func (fs *TorrentFS) Destory() {
+func (fs *TorrentFS) Destroy() {
 	for node := fs.root.Child; node != nil; node = node.Sibling {
 		node.Torrent.Drop()
 	}
@@ -62,16 +62,19 @@ func (root *RootNode) Update() {
 
 func (root *RootNode) Attr(ctx context.Context, attr *fuse.Attr) error {
 	attr.Mode = os.ModeDir
+	for node := root.Child; node != nil; node = node.Sibling {
+		attr.Size += uint64(node.Length)
+	}
 	return nil
 }
 
 func (root *RootNode) Lookup(ctx context.Context, name string) (fs.Node, error) {
 	for node := root.Child; node != nil; node = node.Sibling {
 		if node.Name == name {
-			return *node, nil
+			return node, nil
 		}
 	}
-	return Node{}, fuse.ENOENT
+	return &Node{}, fuse.ENOENT
 }
 
 func (root *RootNode) ReadDirAll(ctx context.Context) (entry []fuse.Dirent, err error) {
@@ -141,7 +144,7 @@ func (node *Node) Build(info *metainfo.Info) {
 }
 
 func (node *Node) Attr(ctx context.Context, attr *fuse.Attr) error {
-	attr.Size = node.Length
+	attr.Size = uint64(node.Length)
 	attr.Mode = readOnly
 	if node.Type == fuse.DT_Dir {
 		attr.Mode |= os.ModeDir
@@ -150,16 +153,16 @@ func (node *Node) Attr(ctx context.Context, attr *fuse.Attr) error {
 }
 
 func (node *Node) Lookup(ctx context.Context, name string) (fs.Node, error) {
-	for child := root.Child; child != nil; child = child.Sibling {
+	for child := node.Child; child != nil; child = child.Sibling {
 		if child.Name == name {
-			return *child, nil
+			return child, nil
 		}
 	}
-	return Node{}, fuse.ENOENT
+	return &Node{}, fuse.ENOENT
 }
 
 func (node *Node) ReadDirAll(ctx context.Context) (entry []fuse.Dirent, err error) {
-	for child := root.Child; child != nil; child = child.Sibling {
+	for child := node.Child; child != nil; child = child.Sibling {
 		entry = append(entry, fuse.Dirent{Type: child.Type, Name: child.Name})
 	}
 	return entry, err
@@ -170,7 +173,13 @@ func (node *Node) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.Re
 		panic("Reading from a directory!")
 	}
 
-	var err error
+	// This line is really important!
+	resp.Data = resp.Data[:req.Size]
+
+	var (
+		err error
+		n   int
+	)
 	done := make(chan struct{})
 
 	go func() {
@@ -184,14 +193,26 @@ func (node *Node) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.Re
 			return
 		}
 
-		_, err = reader.Read(resp.Data[:req.Size])
+		n, err = reader.Read(resp.Data)
 	}()
 
 	select {
 	case <-done:
-		return err
+		if n < req.Size {
+			panic("Not enough data read!")
+		}
 	case <-ctx.Done():
-		return fuse.EINTR
+		err = fuse.EINTR
+	}
+
+	return err
+}
+
+func getTypeFromInfo(info *metainfo.Info) fuse.DirentType {
+	if info.IsDir() {
+		return fuse.DT_Dir
+	} else {
+		return fuse.DT_File
 	}
 }
 
@@ -199,7 +220,7 @@ func newNode(torrent *torrent.Torrent) *Node {
 	info := torrent.Info()
 	node := &Node{
 		Torrent: torrent,
-		Type:    fuse.DT_Dir,
+		Type:    getTypeFromInfo(info),
 		Name:    torrent.Name(),
 		Length:  torrent.Length(),
 	}
