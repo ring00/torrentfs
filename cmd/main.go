@@ -77,10 +77,10 @@ Options:
 
 	// Setting up the BitTorrent client
 	client, err := torrent.NewClient(&torrent.Config{
-		DataDir:     downloadDir,
-		NoUpload:    true,
-		DisableIPv6: false,
-		Debug:       true,
+		DataDir:            downloadDir,
+		NoUpload:           true,
+		PreferNoEncryption: true,
+		Debug:              true,
 	})
 	if err != nil {
 		panic(err)
