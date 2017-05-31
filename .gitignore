@@ -3,6 +3,7 @@
 
 ### Go ###
 # Binaries for programs and plugins
+torrentfs
 *.exe
 *.dll
 *.so
